@@ -369,7 +369,7 @@ let state = {
   filtroTipoMov: '',
 };
 
-let appVersion = '2.1.3';
+let appVersion = '2.1.4';
 if (window.electronAPI && window.electronAPI.getVersion) {
   window.electronAPI.getVersion().then(v => { appVersion = v; actualizarVersionUI(); });
 }
