@@ -61,44 +61,68 @@ function semverCompare(a, b) {
   return 0;
 }
 
+const debugLog = path.join(app.getPath('home'), 'updater-debug.log');
+function dbg(msg) {
+  const line = `[${new Date().toISOString()}] ${msg}\n`;
+  fs.appendFileSync(debugLog, line);
+  console.log(msg);
+}
+
 function httpGet(url) {
   return new Promise((resolve, reject) => {
-    https.get(url, { headers: { 'User-Agent': 'bodega-insumos' } }, (res) => {
+    const req = https.get(url, { headers: { 'User-Agent': 'bodega-insumos' } }, (res) => {
       let data = '';
       res.on('data', c => data += c);
       res.on('end', () => resolve(data));
-    }).on('error', reject);
+    });
+    req.on('error', reject);
+    req.setTimeout(10000, () => { req.destroy(); reject(new Error('Timeout')); });
   });
 }
 
 async function checkForUpdates(mainWindow) {
   try {
     const currentVer = app.getVersion();
-    console.log(`[Updater] Versión actual: v${currentVer}`);
+    dbg(`Versión actual: v${currentVer}`);
 
-    const body = await httpGet(
-      'https://api.github.com/repos/dcamposcarrasco-ship-it/bodega-insumos/releases/latest'
-    );
-    const release = JSON.parse(body);
-    const latestTag = release.tag_name.replace('v', '');
-    console.log(`[Updater] Última versión en GitHub: v${latestTag}`);
-
-    if (semverCompare(latestTag, currentVer) <= 0) {
-      console.log('[Updater] Ya tienes la última versión.');
+    dbg('Consultando GitHub API...');
+    let body;
+    try {
+      body = await httpGet(
+        'https://api.github.com/repos/dcamposcarrasco-ship-it/bodega-insumos/releases/latest'
+      );
+      dbg(`Respuesta GitHub: ${body.slice(0, 200)}`);
+    } catch (netErr) {
+      dbg(`Error de red: ${netErr.message}`);
       return;
     }
 
+    let release;
+    try {
+      release = JSON.parse(body);
+    } catch (parseErr) {
+      dbg(`Error parseando JSON: ${body.slice(0, 300)}`);
+      return;
+    }
+
+    const latestTag = release.tag_name.replace('v', '');
+    dbg(`Última versión en GitHub: v${latestTag}`);
+
+    if (semverCompare(latestTag, currentVer) <= 0) {
+      dbg('Ya tienes la última versión.');
+      return;
+    }
+
+    dbg('Nueva versión detectada. Buscando latest.yml...');
     const ymlAsset = release.assets.find(a => a.name === 'latest.yml');
-    if (!ymlAsset) { console.log('[Updater] No se encontró latest.yml'); return; }
+    if (!ymlAsset) { dbg('No se encontró latest.yml en los assets'); return; }
 
     const ymlBody = await httpGet(ymlAsset.browser_download_url);
     const exeMatch = ymlBody.match(/url:\s*(\S+)/);
-    const shaMatch = ymlBody.match(/sha512:\s*(\S+)/);
-    const sizeMatch = ymlBody.match(/size:\s*(\d+)/);
-    if (!exeMatch) { console.log('[Updater] No se encontró URL en latest.yml'); return; }
+    if (!exeMatch) { dbg('No se encontró URL en latest.yml'); return; }
 
     const exeUrl = release.assets.find(a => a.name === exeMatch[1]);
-    if (!exeUrl) { console.log('[Updater] No se encontró el asset del .exe'); return; }
+    if (!exeUrl) { dbg(`No se encontró asset: ${exeMatch[1]}`); return; }
 
     const result = await dialog.showMessageBox(mainWindow, {
       type: 'info',
@@ -107,10 +131,10 @@ async function checkForUpdates(mainWindow) {
       detail: `Actual: v${currentVer}\nNueva: v${latestTag}`,
       buttons: ['Descargar', 'Más tarde']
     });
-    if (result.response !== 0) return;
+    if (result.response !== 0) { dbg('Usuario canceló la descarga'); return; }
 
     const dlPath = path.join(app.getPath('temp'), exeMatch[1]);
-    console.log(`[Updater] Descargando a: ${dlPath}`);
+    dbg(`Descargando a: ${dlPath}`);
 
     await new Promise((resolve, reject) => {
       const file = fs.createWriteStream(dlPath);
@@ -120,7 +144,7 @@ async function checkForUpdates(mainWindow) {
       }).on('error', reject);
     });
 
-    console.log('[Updater] Descarga completada.');
+    dbg('Descarga completada.');
 
     const installResult = await dialog.showMessageBox(mainWindow, {
       type: 'info',
@@ -129,7 +153,7 @@ async function checkForUpdates(mainWindow) {
       detail: 'La aplicación se cerrará y se abrirá la nueva versión.',
       buttons: ['Reemplazar y reiniciar', 'Más tarde']
     });
-    if (installResult.response !== 0) return;
+    if (installResult.response !== 0) { dbg('Usuario canceló la instalación'); return; }
 
     const currentExe = process.execPath;
     const updaterScript = path.join(app.getPath('temp'), 'actualizar.bat');
@@ -147,15 +171,19 @@ copy /y ${dq}${dlPath}${dq} ${dq}${currentExe}${dq} >nul
 start ${dq}${dq} ${dq}${currentExe}${dq}
 del ${dq}%~f0${dq}`;
     fs.writeFileSync(updaterScript, batContent);
+    dbg('Lanzando script de actualización y saliendo...');
     require('child_process').exec(updaterScript, () => app.quit());
   } catch (err) {
-    console.error('[Updater] Error:', err.message || err);
+    dbg(`Error: ${err.message || err}`);
+    dbg(err.stack || '');
   }
 }
 
 app.whenReady().then(() => {
+  dbg('App iniciada');
   createWindow();
-  setTimeout(() => checkForUpdates(mainWindow), 3000);
+  dbg('Ventana creada, programando checkForUpdates...');
+  setTimeout(() => checkForUpdates(mainWindow), 5000);
 });
 
 app.on('window-all-closed', () => {
