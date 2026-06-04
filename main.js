@@ -46,6 +46,10 @@ ipcMain.handle('write-file', async (event, filePath, data) => {
   }
 });
 
+ipcMain.handle('get-version', () => {
+  return app.getVersion();
+});
+
 app.whenReady().then(() => {
   createWindow();
   autoUpdater.checkForUpdatesAndNotify();

@@ -367,10 +367,19 @@ let state = {
   rangoDesde: '', rangoHasta: '',
   filtroEstado: 'todos',
   filtroTipoMov: '',
-  editandoId: null, eliminandoId: null, ajustandoId: null,
-  primerUso: false,
 };
 
+let appVersion = '2.1.1';
+if (window.electronAPI && window.electronAPI.getVersion) {
+  window.electronAPI.getVersion().then(v => { appVersion = v; actualizarVersionUI(); });
+}
+function actualizarVersionUI() {
+  const el = document.getElementById('versionLabel');
+  if (el) el.textContent = 'v' + appVersion;
+}
+
+// ============================================================
+// CATEGORÍAS
 // ============================================================
 // INIT — conectar Firebase con timeout real y modo offline
 // ============================================================
@@ -659,6 +668,7 @@ function renderSidebar() {
       <div class="sf-title">Sala Toma de Muestras</div>
       <div class="sf-autor">Daniel Campos</div>
       <div class="sf-año">© 2026</div>
+      <div class="sf-version" id="versionLabel">v${appVersion}</div>
     </div>`;
 }
 
