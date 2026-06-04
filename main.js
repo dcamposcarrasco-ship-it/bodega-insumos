@@ -1,6 +1,7 @@
 const { app, BrowserWindow, dialog, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const https = require('https');
 const { autoUpdater } = require('electron-updater');
 
 let mainWindow;
@@ -50,55 +51,111 @@ ipcMain.handle('get-version', () => {
   return app.getVersion();
 });
 
-app.whenReady().then(() => {
-  createWindow();
+function semverCompare(a, b) {
+  const pa = a.replace('v', '').split('.').map(Number);
+  const pb = b.replace('v', '').split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    if (pa[i] > pb[i]) return 1;
+    if (pa[i] < pb[i]) return -1;
+  }
+  return 0;
+}
 
-  autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = false;
-
-  autoUpdater.setFeedURL({
-    provider: 'github',
-    owner: 'dcamposcarrasco-ship-it',
-    repo: 'bodega-insumos'
+function httpGet(url) {
+  return new Promise((resolve, reject) => {
+    https.get(url, { headers: { 'User-Agent': 'bodega-insumos' } }, (res) => {
+      let data = '';
+      res.on('data', c => data += c);
+      res.on('end', () => resolve(data));
+    }).on('error', reject);
   });
+}
 
-  autoUpdater.checkForUpdatesAndNotify();
-});
+async function checkForUpdates(mainWindow) {
+  try {
+    const currentVer = app.getVersion();
+    console.log(`[Updater] Versión actual: v${currentVer}`);
 
-autoUpdater.on('checking-for-update', () => {
-  console.log('[Updater] Buscando actualizaciones...');
-});
+    const body = await httpGet(
+      'https://api.github.com/repos/dcamposcarrasco-ship-it/bodega-insumos/releases/latest'
+    );
+    const release = JSON.parse(body);
+    const latestTag = release.tag_name.replace('v', '');
+    console.log(`[Updater] Última versión en GitHub: v${latestTag}`);
 
-autoUpdater.on('update-available', (info) => {
-  console.log('[Updater] Actualización disponible:', info.version);
-});
+    if (semverCompare(latestTag, currentVer) <= 0) {
+      console.log('[Updater] Ya tienes la última versión.');
+      return;
+    }
 
-autoUpdater.on('update-not-available', (info) => {
-  console.log('[Updater] Ya tienes la última versión:', info.version);
-});
+    const ymlAsset = release.assets.find(a => a.name === 'latest.yml');
+    if (!ymlAsset) { console.log('[Updater] No se encontró latest.yml'); return; }
 
-autoUpdater.on('error', (err) => {
-  console.error('[Updater] Error:', err.message || err);
-});
+    const ymlBody = await httpGet(ymlAsset.browser_download_url);
+    const exeMatch = ymlBody.match(/url:\s*(\S+)/);
+    const shaMatch = ymlBody.match(/sha512:\s*(\S+)/);
+    const sizeMatch = ymlBody.match(/size:\s*(\d+)/);
+    if (!exeMatch) { console.log('[Updater] No se encontró URL en latest.yml'); return; }
 
-autoUpdater.on('download-progress', (progressObj) => {
-  console.log(`[Updater] Descargando: ${progressObj.percent.toFixed(1)}%`);
-});
+    const exeUrl = release.assets.find(a => a.name === exeMatch[1]);
+    if (!exeUrl) { console.log('[Updater] No se encontró el asset del .exe'); return; }
 
-autoUpdater.on('update-downloaded', (info) => {
-  console.log('[Updater] Actualización descargada:', info.version);
-  if (mainWindow) {
-    dialog.showMessageBox(mainWindow, {
+    const result = await dialog.showMessageBox(mainWindow, {
       type: 'info',
       title: 'Actualización disponible',
-      message: `Versión ${info.version} descargada. ¿Reiniciar ahora para instalarla?`,
-      buttons: ['Reiniciar ahora', 'Más tarde']
-    }).then(result => {
-      if (result.response === 0) {
-        setImmediate(() => autoUpdater.quitAndInstall());
-      }
+      message: `Nueva versión v${latestTag} disponible. ¿Descargar ahora?`,
+      detail: `Actual: v${currentVer}\nNueva: v${latestTag}`,
+      buttons: ['Descargar', 'Más tarde']
     });
+    if (result.response !== 0) return;
+
+    const dlPath = path.join(app.getPath('temp'), exeMatch[1]);
+    console.log(`[Updater] Descargando a: ${dlPath}`);
+
+    await new Promise((resolve, reject) => {
+      const file = fs.createWriteStream(dlPath);
+      https.get(exeUrl.browser_download_url, { headers: { 'User-Agent': 'bodega-insumos' } }, (res) => {
+        res.pipe(file);
+        file.on('finish', () => { file.close(); resolve(); });
+      }).on('error', reject);
+    });
+
+    console.log('[Updater] Descarga completada.');
+
+    const installResult = await dialog.showMessageBox(mainWindow, {
+      type: 'info',
+      title: 'Descarga completada',
+      message: `Versión v${latestTag} descargada. ¿Reemplazar el ejecutable ahora?`,
+      detail: 'La aplicación se cerrará y se abrirá la nueva versión.',
+      buttons: ['Reemplazar y reiniciar', 'Más tarde']
+    });
+    if (installResult.response !== 0) return;
+
+    const currentExe = process.execPath;
+    const updaterScript = path.join(app.getPath('temp'), 'actualizar.bat');
+    const pid = process.pid;
+    const dq = String.fromCharCode(34);
+    const batContent =
+`@echo off
+:wait
+tasklist /fi ${dq}PID eq ${pid}${dq} 2>nul | find ${dq}${pid}${dq} >nul
+if not errorlevel 1 (
+  timeout /t 1 /nobreak >nul
+  goto wait
+)
+copy /y ${dq}${dlPath}${dq} ${dq}${currentExe}${dq} >nul
+start ${dq}${dq} ${dq}${currentExe}${dq}
+del ${dq}%~f0${dq}`;
+    fs.writeFileSync(updaterScript, batContent);
+    require('child_process').exec(updaterScript, () => app.quit());
+  } catch (err) {
+    console.error('[Updater] Error:', err.message || err);
   }
+}
+
+app.whenReady().then(() => {
+  createWindow();
+  setTimeout(() => checkForUpdates(mainWindow), 3000);
 });
 
 app.on('window-all-closed', () => {
