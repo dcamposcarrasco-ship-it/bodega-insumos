@@ -52,31 +52,41 @@ ipcMain.handle('get-version', () => {
 
 app.whenReady().then(() => {
   createWindow();
+
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = false;
+
+  autoUpdater.setFeedURL({
+    provider: 'github',
+    owner: 'dcamposcarrasco-ship-it',
+    repo: 'bodega-insumos'
+  });
+
   autoUpdater.checkForUpdatesAndNotify();
 });
 
 autoUpdater.on('checking-for-update', () => {
-  console.log('Buscando actualizaciones...');
+  console.log('[Updater] Buscando actualizaciones...');
 });
 
 autoUpdater.on('update-available', (info) => {
-  console.log('Actualización disponible:', info.version);
+  console.log('[Updater] Actualización disponible:', info.version);
 });
 
 autoUpdater.on('update-not-available', (info) => {
-  console.log('Ya tienes la última versión.');
+  console.log('[Updater] Ya tienes la última versión:', info.version);
 });
 
 autoUpdater.on('error', (err) => {
-  console.error('Error en auto-updater:', err);
+  console.error('[Updater] Error:', err.message || err);
 });
 
 autoUpdater.on('download-progress', (progressObj) => {
-  console.log(`Descargando: ${progressObj.percent.toFixed(1)}%`);
+  console.log(`[Updater] Descargando: ${progressObj.percent.toFixed(1)}%`);
 });
 
 autoUpdater.on('update-downloaded', (info) => {
-  console.log('Actualización descargada:', info.version);
+  console.log('[Updater] Actualización descargada:', info.version);
   if (mainWindow) {
     dialog.showMessageBox(mainWindow, {
       type: 'info',
