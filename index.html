@@ -175,6 +175,15 @@ tbody td{padding:8px 11px;border-bottom:1px solid var(--border);vertical-align:m
 </head>
 <body>
 
+<!-- NOTIFICACIÓN DE ACTUALIZACIÓN -->
+<div id="updateBanner" style="display:none;position:fixed;top:0;left:0;right:0;z-index:9999;background:#1a73e8;color:#fff;padding:12px 20px;font-size:14px;display:none;justify-content:space-between;align-items:center;box-shadow:0 2px 10px rgba(0,0,0,0.3)">
+  <span id="updateMsg">Nueva versión disponible</span>
+  <div>
+    <button id="updateActionBtn" style="background:#fff;color:#1a73e8;border:none;padding:6px 16px;border-radius:4px;cursor:pointer;font-weight:bold;margin-right:8px">Descargar</button>
+    <button id="updateCloseBtn" style="background:transparent;color:#fff;border:1px solid rgba(255,255,255,0.5);padding:6px 12px;border-radius:4px;cursor:pointer">✕</button>
+  </div>
+</div>
+
 <!-- PANTALLA DE CARGA -->
 <div class="loading-screen" id="loadingScreen">
   <div class="loading-logo">🧪</div>
@@ -369,7 +378,7 @@ let state = {
   filtroTipoMov: '',
 };
 
-let appVersion = '2.1.6';
+let appVersion = '2.1.7';
 if (window.electronAPI && window.electronAPI.getVersion) {
   window.electronAPI.getVersion().then(v => { appVersion = v; actualizarVersionUI(); });
 }
@@ -1350,6 +1359,44 @@ window.confirmarEliminar=confirmarEliminar;
 window.exportarExcel=exportarExcel;
 window.cerrarModal=cerrarModal;
 window.renderTab=renderTab;
+
+// ============================================================
+// ACTUALIZACIONES (IPC desde main.js)
+// ============================================================
+let updateInfo = null;
+if (window.electronAPI && window.electronAPI.onUpdateAvailable) {
+  window.electronAPI.onUpdateAvailable((data) => {
+    updateInfo = data;
+    document.getElementById('updateMsg').textContent = `Nueva versión v${data.version} disponible`;
+    document.getElementById('updateBanner').style.display = 'flex';
+  });
+  window.electronAPI.onUpdateProgress((data) => {
+    document.getElementById('updateMsg').textContent = `Descargando actualización... ${data.percent.toFixed(0)}%`;
+  });
+  window.electronAPI.onUpdateReady((data) => {
+    document.getElementById('updateMsg').textContent = `Versión v${data.version} descargada`;
+    document.getElementById('updateActionBtn').textContent = 'Reemplazar y reiniciar';
+    updateInfo = data;
+  });
+}
+
+document.getElementById('updateActionBtn').addEventListener('click', async () => {
+  if (updateInfo && updateInfo.ready) {
+    if (window.electronAPI && window.electronAPI.startUpdate) {
+      await window.electronAPI.startUpdate();
+    }
+  } else {
+    document.getElementById('updateMsg').textContent = 'Descargando...';
+    document.getElementById('updateActionBtn').disabled = true;
+    if (window.electronAPI && window.electronAPI.startDownload) {
+      await window.electronAPI.startDownload();
+    }
+  }
+});
+
+document.getElementById('updateCloseBtn').addEventListener('click', () => {
+  document.getElementById('updateBanner').style.display = 'none';
+});
 
 // ============================================================
 // ARRANCAR
