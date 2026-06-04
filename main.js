@@ -1,6 +1,7 @@
 const { app, BrowserWindow, dialog, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { autoUpdater } = require('electron-updater');
 
 let mainWindow;
 
@@ -45,7 +46,46 @@ ipcMain.handle('write-file', async (event, filePath, data) => {
   }
 });
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  createWindow();
+  autoUpdater.checkForUpdatesAndNotify();
+});
+
+autoUpdater.on('checking-for-update', () => {
+  console.log('Buscando actualizaciones...');
+});
+
+autoUpdater.on('update-available', (info) => {
+  console.log('Actualización disponible:', info.version);
+});
+
+autoUpdater.on('update-not-available', (info) => {
+  console.log('Ya tienes la última versión.');
+});
+
+autoUpdater.on('error', (err) => {
+  console.error('Error en auto-updater:', err);
+});
+
+autoUpdater.on('download-progress', (progressObj) => {
+  console.log(`Descargando: ${progressObj.percent.toFixed(1)}%`);
+});
+
+autoUpdater.on('update-downloaded', (info) => {
+  console.log('Actualización descargada:', info.version);
+  if (mainWindow) {
+    dialog.showMessageBox(mainWindow, {
+      type: 'info',
+      title: 'Actualización disponible',
+      message: `Versión ${info.version} descargada. ¿Reiniciar ahora para instalarla?`,
+      buttons: ['Reiniciar ahora', 'Más tarde']
+    }).then(result => {
+      if (result.response === 0) {
+        setImmediate(() => autoUpdater.quitAndInstall());
+      }
+    });
+  }
+});
 
 app.on('window-all-closed', () => {
   app.quit();

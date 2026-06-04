@@ -1,20 +1,31 @@
 {
   "name": "bodega-insumos",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Bodega de Insumos — Sala Toma de Muestras",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "build": "electron-builder --win portable",
-    "build-installer": "electron-builder --win nsis"
+    "build-installer": "electron-builder --win nsis",
+    "release": "electron-builder --win portable --publish always",
+    "release-installer": "electron-builder --win nsis --publish always"
   },
   "build": {
     "appId": "com.bodega.insumos",
     "productName": "Bodega Insumos STM",
     "win": {
-      "target": ["portable", "nsis"],
+      "target": [
+        "portable",
+        "nsis"
+      ],
       "icon": "icon.ico",
       "signAndEditExecutable": false
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "dcamposcarrasco-ship-it",
+      "repo": "bodega-insumos",
+      "releaseType": "release"
     },
     "nsis": {
       "oneClick": false,
@@ -30,5 +41,8 @@
   "devDependencies": {
     "electron": "^42.3.3",
     "electron-builder": "^26.8.1"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.3"
   }
 }
