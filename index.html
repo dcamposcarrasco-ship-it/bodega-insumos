@@ -886,7 +886,7 @@ function renderStockTab() {
     const critico = c>0 && totalR>0 && totalR<=c;
     const color = totalR<=0?'var(--danger)':critico?'#d97706':'var(--cat-color)';
     return `
-    <tr style="background:#f0ede8;font-weight:800;border-top:2px solid var(--cat-color)">
+    <tr style="background:#f0ede8;font-weight:800;border-bottom:2px solid var(--cat-color)">
       <td class="td-desc">TOTAL STOCK</td>
       <td></td><td></td>
       <td class="td-num" style="font-size:.95rem;color:${color}">${totalR}</td>
