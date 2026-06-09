@@ -1,18 +1,18 @@
 {
   "name": "bodega-insumos",
-  "version": "2.1.8",
+  "version": "2.3.1",
   "description": "Bodega de Insumos — Sala Toma de Muestras",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "build": "electron-builder --win portable",
     "build-installer": "electron-builder --win nsis",
-    "release": "electron-builder --win portable --publish always",
-    "release-installer": "electron-builder --win nsis --publish always"
+    "release": "electron-builder --win --publish always"
   },
   "build": {
     "appId": "com.bodega.insumos",
     "productName": "Bodega Insumos STM",
+    "afterPack": "./afterPack.js",
     "win": {
       "target": [
         "portable",
@@ -28,21 +28,21 @@
       "releaseType": "release"
     },
     "nsis": {
-      "oneClick": false,
+      "oneClick": true,
       "perMachine": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": false
     },
     "files": [
       "main.js",
       "index.html",
-      "preload.js"
+      "preload.js",
+      "icon.ico"
     ]
   },
   "devDependencies": {
+    "@electron/rebuild": "^4.0.4",
     "electron": "^42.3.3",
     "electron-builder": "^26.8.1"
   },
-  "dependencies": {
-    "electron-updater": "^6.8.3"
-  }
+  "dependencies": {}
 }

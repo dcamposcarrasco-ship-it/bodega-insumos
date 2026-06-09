@@ -2,7 +2,6 @@ const { app, BrowserWindow, dialog, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const https = require('https');
-const { autoUpdater } = require('electron-updater');
 
 let mainWindow;
 
@@ -56,26 +55,20 @@ ipcMain.handle('start-download', async () => {
   await performDownload(mainWindow);
 });
 
-ipcMain.handle('start-update', async () => {
-  const currentExe = process.execPath;
+ipcMain.handle('start-update', () => {
   const dlPath = _pendingDlPath;
-  const pid = process.pid;
-  const dq = String.fromCharCode(34);
-  const batContent =
-`@echo off
-:wait
-tasklist /fi ${dq}PID eq ${pid}${dq} 2>nul | find ${dq}${pid}${dq} >nul
-if not errorlevel 1 (
-  timeout /t 1 /nobreak >nul
-  goto wait
-)
-copy /y ${dq}${dlPath}${dq} ${dq}${currentExe}${dq} >nul
-start ${dq}${dq} ${dq}${currentExe}${dq}
-del ${dq}%~f0${dq}`;
-  const updaterScript = path.join(app.getPath('temp'), 'actualizar.bat');
-  fs.writeFileSync(updaterScript, batContent);
-  dbg('Ejecutando reemplazo y saliendo...');
-  require('child_process').exec(updaterScript, () => app.quit());
+  dbg(`start-update: pid=${process.pid}, dlPath=${dlPath}`);
+
+  // Ejecutar el Setup.exe en modo silencioso (/S)
+  // NSIS oneClick per-user no necesita elevación, /S es completamente invisible
+  try {
+    const cp = require('child_process');
+    cp.spawn(dlPath, ['/S'], { detached: true, stdio: 'ignore' }).unref();
+    dbg('Setup lanzado con /S');
+  } catch (e) {
+    dbg(`Error lanzando Setup: ${e.message}`);
+  }
+  setImmediate(() => { dbg('Saliendo con app.exit(0)'); app.exit(0); });
 });
 
 let _pendingDlPath = '';
@@ -101,11 +94,18 @@ function httpGet(url) {
   return new Promise((resolve, reject) => {
     const req = https.get(url, { headers: { 'User-Agent': 'bodega-insumos' } }, (res) => {
       let data = '';
+      dbg(`httpGet status: ${res.statusCode} for ${url}`);
       res.on('data', c => data += c);
-      res.on('end', () => resolve(data));
+      res.on('end', () => {
+        if (res.statusCode >= 400) {
+          reject(new Error(`HTTP ${res.statusCode}: ${data.slice(0,200)}`));
+        } else {
+          resolve(data);
+        }
+      });
     });
     req.on('error', reject);
-    req.setTimeout(10000, () => { req.destroy(); reject(new Error('Timeout')); });
+    req.setTimeout(15000, () => { req.destroy(); reject(new Error('Timeout')); });
   });
 }
 
@@ -142,23 +142,17 @@ async function checkForUpdates(mainWindow) {
       return;
     }
 
-    dbg('Nueva versión detectada. Buscando latest.yml...');
-    const ymlAsset = release.assets.find(a => a.name === 'latest.yml');
-    if (!ymlAsset) { dbg('No se encontró latest.yml en los assets'); return; }
-
-    const ymlBody = await httpGet(ymlAsset.browser_download_url);
-    const exeMatch = ymlBody.match(/url:\s*(\S+)/);
-    if (!exeMatch) { dbg('No se encontró URL en latest.yml'); return; }
-
-    const exeUrl = release.assets.find(a => a.name === exeMatch[1]);
-    if (!exeUrl) { dbg(`No se encontró asset: ${exeMatch[1]}`); return; }
+    dbg('Nueva versión detectada. Buscando Setup .exe en assets...');
+    const exeAsset = release.assets.find(a => a.name.includes('Setup') && a.name.endsWith('.exe')) || release.assets.find(a => a.name.endsWith('.exe') && !a.name.includes('Setup'));
+    if (!exeAsset) { dbg('No se encontró .exe en los assets'); return; }
+    dbg(`Asset encontrado: ${exeAsset.name}`);
 
     dbg('Notificando al renderizador...');
     if (mainWindow) {
       mainWindow.webContents.send('update-available', {
         version: latestTag,
-        exeName: exeMatch[1],
-        exeUrl: exeUrl.browser_download_url
+        exeName: exeAsset.name,
+        exeUrl: exeAsset.browser_download_url
       });
     }
   } catch (err) {
@@ -175,36 +169,56 @@ async function performDownload(mainWindow) {
     );
     const release = JSON.parse(body);
     const latestTag = release.tag_name.replace('v', '');
-    const ymlAsset = release.assets.find(a => a.name === 'latest.yml');
-    if (!ymlAsset) { dbg('No latest.yml'); return; }
-    const ymlBody = await httpGet(ymlAsset.browser_download_url);
-    const exeMatch = ymlBody.match(/url:\s*(\S+)/);
-    if (!exeMatch) { dbg('No exe in yml'); return; }
-    const exeUrl = release.assets.find(a => a.name === exeMatch[1]);
-    if (!exeUrl) { dbg('No exe asset'); return; }
+    const exeAsset = release.assets.find(a => a.name.includes('Setup') && a.name.endsWith('.exe')) || release.assets.find(a => a.name.endsWith('.exe') && !a.name.includes('Setup'));
+    if (!exeAsset) { dbg('No exe asset'); return; }
 
-    const dlPath = path.join(app.getPath('temp'), exeMatch[1]);
+    const dlPath = path.join(app.getPath('temp'), exeAsset.name);
     _pendingDlPath = dlPath;
     dbg(`Descargando a: ${dlPath}`);
 
-    await new Promise((resolve, reject) => {
-      const file = fs.createWriteStream(dlPath);
-      const req = https.get(exeUrl.browser_download_url, { headers: { 'User-Agent': 'bodega-insumos' } }, (res) => {
-        const total = parseInt(res.headers['content-length'] || '0', 10);
-        let downloaded = 0;
-        res.on('data', (chunk) => {
-          downloaded += chunk.length;
-          if (total && mainWindow) {
-            mainWindow.webContents.send('update-progress', {
-              percent: (downloaded / total) * 100
-            });
+    function downloadFile(url) {
+      return new Promise((resolve, reject) => {
+        dbg(`Descargando desde URL: ${url}`);
+        const file = fs.createWriteStream(dlPath);
+        const req = https.get(url, { headers: { 'User-Agent': 'bodega-insumos' } }, (res) => {
+          if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+            file.close();
+            fs.unlinkSync(dlPath);
+            dbg(`Redirigiendo a: ${res.headers.location}`);
+            resolve(downloadFile(res.headers.location));
+            return;
           }
+          if (res.statusCode >= 400) {
+            reject(new Error(`HTTP ${res.statusCode}`));
+            return;
+          }
+          const total = parseInt(res.headers['content-length'] || '0', 10);
+          dbg(`Download: status=${res.statusCode}, content-length=${total}`);
+          let downloaded = 0;
+          res.on('data', (chunk) => {
+            downloaded += chunk.length;
+            if (total && mainWindow) {
+              mainWindow.webContents.send('update-progress', {
+                percent: (downloaded / total) * 100
+              });
+            }
+          });
+          res.pipe(file);
+          file.on('finish', () => {
+            file.close();
+            const stats = fs.statSync(dlPath);
+            dbg(`Descarga completada. Tamaño archivo: ${stats.size}, bytes recibidos: ${downloaded}`);
+            if (stats.size < 1000000) {
+              dbg(`ERROR: archivo demasiado pequeño (${stats.size} bytes), posible descarga corrupta`);
+            }
+            resolve();
+          });
         });
-        res.pipe(file);
-        file.on('finish', () => { file.close(); resolve(); });
+        req.on('error', reject);
+        req.setTimeout(120000, () => { req.destroy(); reject(new Error('Timeout descarga')); });
       });
-      req.on('error', reject);
-    });
+    }
+    await downloadFile(exeAsset.browser_download_url);
 
     dbg('Descarga completada.');
     if (mainWindow) {
