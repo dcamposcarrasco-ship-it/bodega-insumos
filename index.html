@@ -342,7 +342,7 @@ tbody td{padding:8px 11px;border-bottom:1px solid var(--border);vertical-align:m
 <!-- Firebase SDK -->
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, collection, addDoc, getDocs, deleteDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, collection, addDoc, getDocs, deleteDoc, deleteField, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import * as XLSX from "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/+esm";
 
 // ============================================================
@@ -382,7 +382,7 @@ let state = {
   editandoDescripcion: null,
 };
 
-let appVersion = '2.3.3';
+let appVersion = '2.3.4';
 if (window.electronAPI && window.electronAPI.getVersion) {
   window.electronAPI.getVersion().then(v => { appVersion = v; actualizarVersionUI(); });
 }
@@ -528,6 +528,7 @@ async function cargarTodo() {
     ]);
     const productos   = prodSnap.docs.map(d => {
       const raw = d.data();
+      if (raw.stockActual !== undefined) limpiarCampoLegacy(catDef.id, d.id);
       return {_docId:d.id, ...migrarProducto(raw)};
     });
     const movimientos = movSnap.docs.map(d => ({_docId:d.id, ...d.data()}));
@@ -548,7 +549,9 @@ function escucharCambios() {
       const c = state.categorias.find(x=>x.id===cat.id);
       if (!c) return;
       snap.docChanges().forEach(change => {
-        const raw = migrarProducto(change.doc.data());
+        const rawDoc = change.doc.data();
+        if (rawDoc.stockActual !== undefined) limpiarCampoLegacy(cat.id, change.doc.id);
+        const raw = migrarProducto(rawDoc);
         const data = {_docId: change.doc.id, ...raw};
         if (change.type === 'added' || change.type === 'modified') {
           const idx = c.productos.findIndex(p=>p._docId===data._docId);
@@ -588,10 +591,27 @@ function escucharCambios() {
 function slugify(s) {
   return s.toLowerCase().replace(/[^a-z0-9]/g,'-').replace(/-+/g,'-').substring(0,80);
 }
+// Elimina en Firestore el campo fantasma "stockActual" que quedo de la
+// migracion v2.3.1 (esa migracion solo actualizaba el estado en memoria).
+// Mientras exista, cualquier onSnapshot vuelve a pisar stockReal con su
+// valor viejo. Se ejecuta en segundo plano, sin bloquear el render.
+const _legacyLimpiado = new Set();
+function limpiarCampoLegacy(catId, docId) {
+  const key = catId + '/' + docId;
+  if (_legacyLimpiado.has(key)) return;
+  _legacyLimpiado.add(key);
+  updateDoc(doc(db, `bodega/${catId}/productos`, docId), { stockActual: deleteField() }).catch(()=>{});
+}
 function migrarProducto(raw) {
   if (!raw) return raw;
-  // Convertir campo antiguo stockActual -> stockReal
-  if (raw.stockActual !== undefined) { raw.stockReal = raw.stockActual || 0; delete raw.stockActual; }
+  // Convertir campo antiguo stockActual -> stockReal.
+  // Si el documento ya tiene stockReal (aunque sea 0), ese es el valor
+  // vigente: stockActual es un campo fantasma que quedo sin limpiar en
+  // Firestore y NO debe pisar actualizaciones mas recientes de stockReal.
+  if (raw.stockActual !== undefined) {
+    if (raw.stockReal === undefined || raw.stockReal === null) raw.stockReal = raw.stockActual || 0;
+    delete raw.stockActual;
+  }
   // Asegurar stockCritico y stockIdeal
   if (raw.stockCritico === undefined || raw.stockCritico === null) raw.stockCritico = 0;
   if (raw.stockIdeal === undefined || raw.stockIdeal === null) raw.stockIdeal = 0;
