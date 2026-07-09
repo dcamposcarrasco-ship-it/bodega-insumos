@@ -382,7 +382,7 @@ let state = {
   editandoDescripcion: null,
 };
 
-let appVersion = '2.3.1';
+let appVersion = '2.3.3';
 if (window.electronAPI && window.electronAPI.getVersion) {
   window.electronAPI.getVersion().then(v => { appVersion = v; actualizarVersionUI(); });
 }
@@ -1285,26 +1285,39 @@ async function aplicarAjuste() {
   else{nuevo=cant;}
 
   setSyncStatus('syncing','Guardando...');
+
+  // Actualizacion optimista: reflejar el cambio en la tabla de inmediato,
+  // sin esperar el viaje de ida y vuelta a Firestore (onSnapshot puede
+  // tardar o, si falla la escritura, nunca llegar).
+  p.stockReal = nuevo;
+  const variantes = cat.productos.filter(x=>x.descripcion===p.descripcion);
+  const todasCero = variantes.every(x=>x._docId===state.ajustandoId ? nuevo===0 : (x.stockReal||0)===0);
+  if(todasCero && variantes.length>0){
+    variantes.forEach(v=>{ v.lote=''; v.formato=''; v.fechaVencimiento=''; v.unidad=0; });
+  }
+  renderMain();
+  cerrarModal('modalAjuste');
+
+  const existentes=cat.movimientos.filter(m=>m.descripcion===p.descripcion);
+  const autoN=existentes.length>0?Math.max(...existentes.map(m=>m.n||0))+1:1;
+  const movimiento={
+    n:autoN, descripcion:p.descripcion, formato:p.formato, unidad:cant,
+    lote:p.lote||'', fechaVencimiento:p.fechaVencimiento||'',
+    fechaIngreso:tipo==='agregar'?fechaHoy():'',
+    ingresa:tipo==='agregar'?resp:'',
+    fechaEgreso:tipo==='descontar'?fechaHoy():'',
+    egresa:tipo==='descontar'?resp:'',
+    motivoEgreso:mot, obs,
+  };
+
   try {
     // Actualizar stock
     await updateDoc(doc(db,`bodega/${cat.id}/productos`,state.ajustandoId),{
       stockReal:nuevo, _actualizado:serverTimestamp()
     });
     // Registrar movimiento automatico
-    const existentes=cat.movimientos.filter(m=>m.descripcion===p.descripcion);
-    const autoN=existentes.length>0?Math.max(...existentes.map(m=>m.n||0))+1:1;
-    await addDoc(collection(db,`bodega/${cat.id}/movimientos`),{
-      n:autoN, descripcion:p.descripcion, formato:p.formato, unidad:cant,
-      lote:p.lote||'', fechaVencimiento:p.fechaVencimiento||'',
-      fechaIngreso:tipo==='agregar'?fechaHoy():'',
-      ingresa:tipo==='agregar'?resp:'',
-      fechaEgreso:tipo==='descontar'?fechaHoy():'',
-      egresa:tipo==='descontar'?resp:'',
-      motivoEgreso:mot, obs, _ts:serverTimestamp(),
-    });
+    await addDoc(collection(db,`bodega/${cat.id}/movimientos`),{...movimiento, _ts:serverTimestamp()});
     // Limpieza automatica: si todas las variantes de la misma desc llegan a stockReal=0
-    const variantes = cat.productos.filter(x=>x.descripcion===p.descripcion);
-    const todasCero = variantes.every(x=>x._docId===state.ajustandoId ? nuevo===0 : (x.stockReal||0)===0);
     if(todasCero && variantes.length>0){
       await Promise.all(variantes.map(v =>
         updateDoc(doc(db,`bodega/${cat.id}/productos`,v._docId),{
@@ -1315,8 +1328,16 @@ async function aplicarAjuste() {
     } else {
       toast(`Stock actualizado: ${nuevo} \u2713`,'success');
     }
-    cerrarModal('modalAjuste');
-  } catch(e){ toast('Error al actualizar','error'); setSyncStatus('offline','Error'); }
+    setSyncStatus('online','En l\u00ednea \u00b7 Tiempo real');
+  } catch(e){
+    // Fallback offline: el cambio ya quedo aplicado localmente arriba;
+    // solo falta persistir el movimiento y guardarlo en localStorage.
+    cat.movimientos.push({_docId:`local-m-${Date.now()}`, ...movimiento});
+    guardarLocal();
+    renderMain();
+    toast('Guardado localmente (sin conexi\u00f3n)','info');
+    setSyncStatus('offline','Sin conexi\u00f3n \u2014 guardado local');
+  }
 }
 
 // ============================================================

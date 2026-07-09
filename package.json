@@ -1,6 +1,6 @@
 {
   "name": "bodega-insumos",
-  "version": "2.3.2",
+  "version": "2.3.3",
   "description": "Bodega de Insumos — Sala Toma de Muestras",
   "main": "main.js",
   "scripts": {
