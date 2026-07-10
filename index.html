@@ -382,7 +382,7 @@ let state = {
   editandoDescripcion: null,
 };
 
-let appVersion = '2.3.5';
+let appVersion = '2.3.6';
 if (window.electronAPI && window.electronAPI.getVersion) {
   window.electronAPI.getVersion().then(v => { appVersion = v; actualizarVersionUI(); });
 }

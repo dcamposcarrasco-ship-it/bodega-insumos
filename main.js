@@ -101,9 +101,27 @@ function dbg(msg) {
   console.log(msg);
 }
 
-function httpGet(url) {
+// NOTA: NO usar api.github.com/repos/.../releases/latest para chequear
+// actualizaciones: esa API tiene un limite de 60 solicitudes/hora POR IP
+// sin autenticacion, compartido por todo lo que use esa IP (navegador,
+// otras apps, etc.). Se agota muy facil y la app deja de detectar
+// actualizaciones sin avisar. En su lugar se usa el alias estable
+// releases/latest/download/<archivo>, que sirve los assets directo desde
+// el CDN de releases y no esta sujeto a ese limite.
+const REPO_OWNER = 'dcamposcarrasco-ship-it';
+const REPO_NAME = 'bodega-insumos';
+const LATEST_YML_URL = `https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/latest/download/latest.yml`;
+
+function httpGet(url, redirectCount = 0) {
   return new Promise((resolve, reject) => {
+    if (redirectCount > 5) { reject(new Error('Demasiadas redirecciones')); return; }
     const req = https.get(url, { headers: { 'User-Agent': 'bodega-insumos' } }, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        dbg(`httpGet redirigiendo a: ${res.headers.location}`);
+        res.resume();
+        resolve(httpGet(res.headers.location, redirectCount + 1));
+        return;
+      }
       let data = '';
       dbg(`httpGet status: ${res.statusCode} for ${url}`);
       res.on('data', c => data += c);
@@ -120,50 +138,49 @@ function httpGet(url) {
   });
 }
 
+async function fetchLatestInfo() {
+  const body = await httpGet(LATEST_YML_URL);
+  const verMatch = body.match(/^version:\s*(.+)$/m);
+  const pathMatch = body.match(/^path:\s*(.+)$/m);
+  if (!verMatch || !pathMatch) throw new Error(`latest.yml invalido: ${body.slice(0, 200)}`);
+  const version = verMatch[1].trim();
+  const exeName = pathMatch[1].trim();
+  return {
+    version,
+    exeName,
+    exeUrl: `https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/latest/download/${exeName}`
+  };
+}
+
 async function checkForUpdates(mainWindow) {
   try {
     const currentVer = app.getVersion();
     dbg(`Versión actual: v${currentVer}`);
 
-    dbg('Consultando GitHub API...');
-    let body;
+    dbg('Consultando latest.yml...');
+    let info;
     try {
-      body = await httpGet(
-        'https://api.github.com/repos/dcamposcarrasco-ship-it/bodega-insumos/releases/latest'
-      );
-      dbg(`Respuesta GitHub: ${body.slice(0, 200)}`);
+      info = await fetchLatestInfo();
+      dbg(`latest.yml: version=${info.version} exeName=${info.exeName}`);
     } catch (netErr) {
       dbg(`Error de red: ${netErr.message}`);
       return;
     }
 
-    let release;
-    try {
-      release = JSON.parse(body);
-    } catch (parseErr) {
-      dbg(`Error parseando JSON: ${body.slice(0, 300)}`);
-      return;
-    }
+    dbg(`Última versión en GitHub: v${info.version}`);
 
-    const latestTag = release.tag_name.replace('v', '');
-    dbg(`Última versión en GitHub: v${latestTag}`);
-
-    if (semverCompare(latestTag, currentVer) <= 0) {
+    if (semverCompare(info.version, currentVer) <= 0) {
       dbg('Ya tienes la última versión.');
       return;
     }
 
-    dbg('Nueva versión detectada. Buscando Setup .exe en assets...');
-    const exeAsset = release.assets.find(a => a.name.includes('Setup') && a.name.endsWith('.exe')) || release.assets.find(a => a.name.endsWith('.exe') && !a.name.includes('Setup'));
-    if (!exeAsset) { dbg('No se encontró .exe en los assets'); return; }
-    dbg(`Asset encontrado: ${exeAsset.name}`);
-
+    dbg('Nueva versión detectada.');
     dbg('Notificando al renderizador...');
     if (mainWindow) {
       mainWindow.webContents.send('update-available', {
-        version: latestTag,
-        exeName: exeAsset.name,
-        exeUrl: exeAsset.browser_download_url
+        version: info.version,
+        exeName: info.exeName,
+        exeUrl: info.exeUrl
       });
     }
   } catch (err) {
@@ -175,15 +192,9 @@ async function checkForUpdates(mainWindow) {
 async function performDownload(mainWindow) {
   try {
     dbg('performDownload iniciado');
-    const body = await httpGet(
-      'https://api.github.com/repos/dcamposcarrasco-ship-it/bodega-insumos/releases/latest'
-    );
-    const release = JSON.parse(body);
-    const latestTag = release.tag_name.replace('v', '');
-    const exeAsset = release.assets.find(a => a.name.includes('Setup') && a.name.endsWith('.exe')) || release.assets.find(a => a.name.endsWith('.exe') && !a.name.includes('Setup'));
-    if (!exeAsset) { dbg('No exe asset'); return; }
+    const info = await fetchLatestInfo();
 
-    const dlPath = path.join(app.getPath('temp'), exeAsset.name);
+    const dlPath = path.join(app.getPath('temp'), info.exeName);
     _pendingDlPath = dlPath;
     dbg(`Descargando a: ${dlPath}`);
 
@@ -229,12 +240,12 @@ async function performDownload(mainWindow) {
         req.setTimeout(120000, () => { req.destroy(); reject(new Error('Timeout descarga')); });
       });
     }
-    await downloadFile(exeAsset.browser_download_url);
+    await downloadFile(info.exeUrl);
 
     dbg('Descarga completada.');
     if (mainWindow) {
       mainWindow.webContents.send('update-ready', {
-        version: latestTag,
+        version: info.version,
         ready: true,
         dlPath: dlPath
       });
